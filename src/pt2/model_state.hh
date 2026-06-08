@@ -55,6 +55,8 @@
 // https://github.com/pytorch/pytorch/blob/v2.2.1-rc3/aten/src/ATen/Parallel.h#L133
 #include <ATen/Parallel.h>
 
+#include "nve_layer_loader.h"
+
 namespace triton::backend::pytorch::pt2 {
 constexpr char INDUCTOR_MODEL_ARTIFACT_NAME_DEFAULT[] = "model.pt2";
 constexpr char INDUCTOR_MODEL_NAME_DEFAULT[] = "model";
@@ -79,11 +81,15 @@ class ModelState : public triton::backend::BackendModel {
       model_package_loaders_;
   bool optimized_execution_enabled_{true};
   bool weight_sharing_enabled_{false};
+  // Opaque handle to NVE embedding layers loaded into the process-global
+  // registry (nullptr for non-NVE models). Kept alive for the model's lifetime,
+  // released in the destructor. See nve_layer_loader.h.
+  void* nve_layers_handle_{nullptr};
 
  public:
   ModelState() = delete;
 
-  virtual ~ModelState() = default;
+  virtual ~ModelState();
 
   [[nodiscard]] bool CacheCleaningEnabled() const;
 

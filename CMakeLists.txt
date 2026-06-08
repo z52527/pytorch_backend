@@ -630,3 +630,49 @@ export(
 )
 
 export(PACKAGE TritonPyTorchBackend)
+
+# ===========================================================================
+# NVE embedding-weight loader (HSTU) — added for in-Triton NVE weight loading.
+# Compiles src/pt2/nve_layer_loader.cu (nvcc; isolated CUDA TU because
+# nve_loader.hpp pulls in cub/cuda_bf16) and links it + libnve into the backend,
+# so model_state.cc's NveLoadLayers() loads weights/*.nve into the
+# NVELayerRegistry at model-load time. NVE_ROOT / NVE_LIB_DIR are injected by the
+# build image (nv-embedding-cache headers + libnve-*.so).
+# ===========================================================================
+if(${TRITON_ENABLE_GPU})
+  enable_language(CUDA)
+  set(NVE_ROOT "/workspace/deps/nve" CACHE PATH "nv-embedding-cache source root")
+  set(NVE_LIB_DIR "/workspace/nve_libs" CACHE PATH "dir containing libnve-*.so")
+
+  find_library(NVE_TORCH_OPS_LIB nve-torch-ops
+    PATHS ${NVE_LIB_DIR} NO_DEFAULT_PATH REQUIRED)
+  find_library(NVE_COMMON_LIB nve-common
+    PATHS ${NVE_LIB_DIR} NO_DEFAULT_PATH REQUIRED)
+
+  add_library(nve_layer_loader STATIC src/pt2/nve_layer_loader.cu)
+  set_target_properties(nve_layer_loader PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    CUDA_STANDARD 17
+    CUDA_STANDARD_REQUIRED ON
+    CUDA_ARCHITECTURES "90")
+  target_include_directories(nve_layer_loader PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/pt2
+    ${NVE_ROOT}
+    ${NVE_ROOT}/include
+    ${NVE_ROOT}/third_party/json/include
+    ${TRITON_PYTORCH_INCLUDE_PATHS}
+    ${TRITON_PYTORCH_INCLUDE_PATHS}/torch/csrc/api/include)
+  target_compile_definitions(nve_layer_loader PRIVATE
+    NVE_FEATURE_HT_PART_FNV1A=1 NVE_FEATURE_HT_PART_MURMUR=1
+    NVE_FEATURE_HT_PART_RRXMRRXMSX0=1 NVE_FEATURE_HT_PART_STD_HASH=1
+    NVE_FEATURE_HT_MASK_64=1 NVE_FEATURE_HT_MASK_32=1
+    NVE_FEATURE_HT_MASK_16=1 NVE_FEATURE_HT_MASK_8=1
+    NVE_FEATURE_HT_KEY_64=1 NVE_FEATURE_HT_KEY_32=1
+    NVE_FEATURE_HT_KEY_16=1 NVE_FEATURE_HT_KEY_8=1
+    NVE_CACHE_LINE_SIZE=64)
+  target_compile_options(nve_layer_loader PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>)
+
+  target_link_libraries(triton-pytorch-backend PRIVATE
+    nve_layer_loader ${NVE_TORCH_OPS_LIB} ${NVE_COMMON_LIB})
+endif()  # TRITON_ENABLE_GPU (NVE loader)

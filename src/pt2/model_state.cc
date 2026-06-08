@@ -62,6 +62,13 @@ ModelState::ModelState(TRITONBACKEND_Model* backend_model)
         "Argument `backend_model` cannot be `null`.");
 }
 
+ModelState::~ModelState()
+{
+  // Release NVE layers, unregistering them from the process-global registry.
+  // (No-op when this was not an NVE model: handle is nullptr.)
+  NveFreeLayers(nve_layers_handle_);
+}
+
 void
 ModelState::AutoCompleteConfig()
 {
@@ -347,6 +354,23 @@ ModelState::LoadModel(
         TRITONSERVER_ERROR_UNAVAILABLE,
         "PyTorch inductor model file \""
             << local_file_path << "\" is unreachable or inaccessible.");
+  }
+
+  // Load NVE embedding weights into the process-global NVELayerRegistry before
+  // the model runs. The weights live OUTSIDE model.pt2 (in <dir>/metadata.json +
+  // <dir>/weights/*.nve), so loading the .pt2 does not load them; the model's
+  // nve_ops::embedding_lookup(layer_id) needs them registered. No-op for non-NVE
+  // models (NveLoadLayers gates on metadata.json). See nve_layer_loader.h.
+  if (nve_layers_handle_ == nullptr) {
+    const std::string package_dir =
+        triton::backend::JoinPath({repository_path, repository_version});
+    nve_layers_handle_ =
+        NveLoadLayers(package_dir, device.is_cpu() ? 0 : device.index());
+    if (nve_layers_handle_ != nullptr) {
+      TRITON_LOG_INFO(
+          "Loaded " << NveLayerCount(nve_layers_handle_)
+                    << " NVE layer(s) for model \"" << Name() << "\".");
+    }
   }
 
   std::pair<bool, int> device_pair{false, 0};
